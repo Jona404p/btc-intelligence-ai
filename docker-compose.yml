@@ -1,0 +1,88 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: btc_timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: btc_user
+      POSTGRES_PASSWORD: btc_password
+      POSTGRES_DB: btc_intelligence
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./backend/init_db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U btc_user -d btc_intelligence"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: btc_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: btc_ollama
+    restart: unless-stopped
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # NOTA: la primera vez, ejecutar dentro del contenedor:
+    #   docker exec -it btc_ollama ollama pull llama3.1
+    # (o el modelo local que prefieras usar)
+
+  backend:
+    build:
+      context: ./backend
+    container_name: btc_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+      - documents_storage:/app/storage/documents
+      # Biblioteca local: carpeta en TU PC (junto a este docker-compose.yml)
+      # con una subcarpeta por categoría. El backend la escanea solo cada
+      # LIBRARY_SCAN_INTERVAL_MINUTES y también al arrancar / al pedirlo
+      # manualmente vía POST /knowledge/scan-library. Copia tus PDFs/TXT/MD
+      # ahí y no toques nada más.
+      - ./knowledge_library:/app/storage/library
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: btc_frontend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  timescale_data:
+  qdrant_data:
+  ollama_data:
+  documents_storage:
